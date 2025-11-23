@@ -1,0 +1,25 @@
+# dependencies
+node_modules
+.pnpm-store
+
+# testing
+coverage
+
+# next.js
+.next/
+out/
+build/
+
+# cloudflare workers
+.wrangler/
+.dev.vars
+
+# misc
+.DS_Store
+*.log
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+dist/
