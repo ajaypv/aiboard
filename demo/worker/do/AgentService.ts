@@ -70,7 +70,7 @@ export class AgentService {
 			}
 
 			// Special handling for Gemini models which require custom auth
-			if (modelName === 'gemini-2.5-flash' || modelName === 'gemini-3-pro-preview') {
+			if (modelName === 'gemini-2.5-flash') {
 				const token = await getAuthToken()
 				const google = createGoogleGenerativeAI({
 					baseURL: `https://aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/`,
@@ -105,11 +105,7 @@ async function* streamActions(
 	let maxOutputTokens = 8192
 	let geminiThinkingBudget = 0
 
-	if (model.modelId === 'gemini-3-pro-preview') {
-		temperature = 1.0
-		maxOutputTokens = 65535
-		geminiThinkingBudget = 1  // Minimum allowed value
-	} else if (model.modelId === 'gemini-2.5-pro') {
+	if (model.modelId === 'gemini-2.5-pro') {
 		temperature = 0
 		maxOutputTokens = 8192
 		geminiThinkingBudget = 128
@@ -126,7 +122,7 @@ async function* streamActions(
 
 	try {
 		// Only force response start for models that support it well
-		if (model.provider === 'anthropic.messages' || (model.provider === 'google.generative-ai' && model.modelId !== 'gemini-3-pro-preview')) {
+		if (model.provider === 'anthropic.messages' || model.provider === 'google.generative-ai') {
 			messages.push({
 				role: 'assistant',
 				content: '{"actions": [{"_type":',
@@ -153,8 +149,7 @@ async function* streamActions(
 		})
 
 		const canForceResponseStart =
-			(model.provider === 'anthropic.messages' || model.provider === 'google.generative-ai') &&
-			model.modelId !== 'gemini-3-pro-preview'
+			(model.provider === 'anthropic.messages' || model.provider === 'google.generative-ai')
 		let buffer = canForceResponseStart ? '{"actions": [{"_type":' : ''
 		let cursor = 0
 		let maybeIncompleteAction: AgentAction | null = null

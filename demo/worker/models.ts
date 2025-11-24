@@ -1,4 +1,4 @@
-export const DEFAULT_MODEL_NAME = 'gemini-3-pro-preview'
+export const DEFAULT_MODEL_NAME = 'gemini-2.5-flash'
 
 export type AgentModelName = keyof typeof AGENT_MODEL_DEFINITIONS
 export type AgentModelProvider = 'openai' | 'anthropic' | 'google' | 'google-live'
@@ -51,13 +51,6 @@ export const AGENT_MODEL_DEFINITIONS = {
 	'gemini-2.5-flash': {
 		name: 'gemini-2.5-flash',
 		id: 'gemini-2.5-flash',
-		provider: 'google',
-	},
-
-	// Strongly recommended
-	'gemini-3-pro-preview': {
-		name: 'gemini-3-pro-preview',
-		id: 'gemini-3-pro-preview',
 		provider: 'google',
 	},
 

@@ -20,6 +20,12 @@ export class ScreenshotPartUtil extends PromptPartUtil<ScreenshotPart> {
 
 		const contextBounds = request.bounds
 
+		// Validate bounds have positive dimensions
+		if (contextBounds.w <= 0 || contextBounds.h <= 0) {
+			console.warn('Screenshot skipped: bounds have non-positive dimensions', contextBounds)
+			return { type: 'screenshot', screenshot: null }
+		}
+
 		const contextBoundsBox = Box.From(contextBounds)
 
 		const shapes = editor.getCurrentPageShapesSorted().filter((shape) => {
