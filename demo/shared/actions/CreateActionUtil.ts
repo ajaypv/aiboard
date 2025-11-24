@@ -5,6 +5,7 @@ import {
 	convertSimpleShapeToTldrawShape,
 	SIMPLE_TO_GEO_TYPES,
 } from '../format/convertSimpleShapeToTldrawShape'
+import { SimpleGeoShapeTypeSchema } from '../format/SimpleGeoShapeType'
 import { SimpleShape, SimpleShapeSchema } from '../format/SimpleShape'
 import { Streaming } from '../types/Streaming'
 import { AgentActionUtil } from './AgentActionUtil'
@@ -43,6 +44,22 @@ export class CreateActionUtil extends AgentActionUtil<CreateAction> {
 			shape.shapeId = 'shape'
 		}
 		shape.shapeId = helpers.ensureShapeIdIsUnique(shape.shapeId)
+
+		// Ensure defaults for common properties to prevent validation errors
+		const shapeAny = shape as any
+
+		// Default color for everything except unknown
+		if (!shapeAny.color && shape._type !== 'unknown') {
+			shapeAny.color = 'black'
+		}
+
+		// Default fill for geo and draw shapes
+		const isGeo = SimpleGeoShapeTypeSchema.safeParse(shape._type).success
+		const isDraw = shape._type === 'draw'
+
+		if ((isGeo || isDraw) && !shapeAny.fill) {
+			shapeAny.fill = 'none'
+		}
 
 		// If the shape is an arrow, ensure the from and to IDs are real shapes
 		if (shape._type === 'arrow') {

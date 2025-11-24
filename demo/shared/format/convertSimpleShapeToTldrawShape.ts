@@ -164,7 +164,9 @@ function convertTextShapeToTldrawShape(
 
 	const effectiveFontSize = textFontSize * scale
 
-	const measurement = editor.textMeasure.measureText(simpleShape.text, {
+	const text = typeof simpleShape.text === 'string' ? simpleShape.text : ''
+
+	const measurement = editor.textMeasure.measureText(text, {
 		...TEXT_PROPS,
 		fontFamily: FONT_FAMILIES[font as keyof typeof FONT_FAMILIES],
 		fontSize: effectiveFontSize,
@@ -205,7 +207,7 @@ function convertTextShapeToTldrawShape(
 			props: {
 				size: textSize,
 				scale,
-				richText: toRichText(simpleShape.text),
+				richText: toRichText(text),
 				color: asColor(simpleShape.color ?? defaultTextShape.props?.color ?? 'black'),
 				textAlign,
 				autoSize,
@@ -291,7 +293,7 @@ function convertArrowShapeToTldrawShape(
 
 	// Handle richText properly - simpleShape takes priority
 	let richText
-	if (simpleShape.text !== undefined) {
+	if (typeof simpleShape.text === 'string') {
 		richText = toRichText(simpleShape.text)
 	} else if (defaultArrowShape.props?.richText) {
 		richText = defaultArrowShape.props.richText
@@ -397,7 +399,7 @@ function convertGeoShapeToTldrawShape(
 
 	// Handle richText properly - simpleShape takes priority
 	let richText
-	if (simpleShape.text !== undefined) {
+	if (typeof simpleShape.text === 'string') {
 		richText = toRichText(simpleShape.text)
 	} else if (defaultGeoShape.props?.richText) {
 		richText = defaultGeoShape.props.richText
@@ -462,7 +464,7 @@ function convertNoteShapeToTldrawShape(
 
 	// Handle richText properly - simpleShape takes priority
 	let richText
-	if (simpleShape.text !== undefined) {
+	if (typeof simpleShape.text === 'string') {
 		richText = toRichText(simpleShape.text)
 	} else if (defaultNoteShape.props?.richText) {
 		richText = defaultNoteShape.props.richText

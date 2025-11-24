@@ -123,6 +123,48 @@ export class AgentDurableObject extends DurableObject<Environment> {
 			const token = await this.getVertexAIToken()
 			console.log('🔑 Got Vertex AI auth token')
 
+			// Generate Plan with Gemini 3 Pro
+			const userPrompt = this.getUserMessage(promptData)
+			let finalPrompt = userPrompt
+
+			try {
+				// Notify client
+				ws.send(JSON.stringify({
+					type: 'action',
+					action: {
+						_type: 'message',
+						message: '🧠 Consulting Gemini 3 Pro Architect for a plan...',
+						complete: true,
+						time: 0
+					}
+				}))
+
+				const plan = await this.generatePlan(userPrompt, token)
+
+				ws.send(JSON.stringify({
+					type: 'action',
+					action: {
+						_type: 'message',
+						message: '📝 Plan created! Executing now...',
+						complete: true,
+						time: 0
+					}
+				}))
+
+				finalPrompt = `User Request: ${userPrompt}\n\nArchitect's Plan:\n${plan}\n\nExecute this plan on the whiteboard.`
+			} catch (e) {
+				console.error('Planning failed, continuing with original prompt', e)
+				ws.send(JSON.stringify({
+					type: 'action',
+					action: {
+						_type: 'message',
+						message: '⚠️ Planner unavailable, proceeding directly...',
+						complete: true,
+						time: 0
+					}
+				}))
+			}
+
 			// Connect to Vertex AI Live API
 			const vertexWsUrl = `wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent?access_token=${encodeURIComponent(token)}`
 			console.log('🌐 Connecting to Vertex AI Live API...')
@@ -132,6 +174,7 @@ export class AgentDurableObject extends DurableObject<Environment> {
 			// Accumulate text from streaming responses
 			let accumulatedText = ''
 			let sentActionCount = 0
+			let hasVerified = false
 
 			vertexWS.addEventListener('open', () => {
 				console.log('✅ Connected to Vertex AI')
@@ -158,7 +201,7 @@ export class AgentDurableObject extends DurableObject<Environment> {
 					clientContent: {
 						turns: [{
 							role: 'user',
-							parts: [{ text: this.getUserMessage(promptData) }]
+							parts: [{ text: finalPrompt }]
 						}],
 						turnComplete: true
 					}
@@ -216,14 +259,46 @@ export class AgentDurableObject extends DurableObject<Environment> {
 						}
 					}
 
-					// When turn is complete, close connection
+					// When turn is complete
 					if (aiResponse.serverContent?.turnComplete) {
 						console.log('✅ Turn complete')
 
-						// Send completion
-						ws.send(JSON.stringify({ type: 'complete' }))
-						console.log('✅ All actions sent, closing Vertex WS')
-						vertexWS.close()
+						if (!hasVerified) {
+							console.log('🔍 Starting verification phase...')
+							hasVerified = true
+
+							// Send verification prompt
+							const verifyMessage = {
+								clientContent: {
+									turns: [{
+										role: 'user',
+										parts: [{ text: "Review your drawing. Is it correct based on the plan? If there are any missing shapes or errors, fix them now. If it is correct, say 'Verification Complete'." }]
+									}],
+									turnComplete: true
+								}
+							}
+							vertexWS.send(JSON.stringify(verifyMessage))
+
+							// Notify client
+							ws.send(JSON.stringify({
+								type: 'action',
+								action: {
+									_type: 'message',
+									message: '🔍 Verifying drawing...',
+									complete: true,
+									time: 0
+								}
+							}))
+
+							// Reset for next turn
+							accumulatedText = ''
+							sentActionCount = 0
+						} else {
+							// Send completion
+							ws.send(JSON.stringify({ type: 'complete' }))
+							console.log('✅ Verification complete, closing Vertex WS')
+							vertexWS.close()
+						}
 					}
 
 					// Log any errors from Vertex AI
@@ -334,6 +409,62 @@ export class AgentDurableObject extends DurableObject<Environment> {
 			complete: true,
 			time: 0
 		}]
+	}
+
+	/**
+	 * Generate a plan using Gemini 3 Pro Preview
+	 */
+	private async generatePlan(prompt: string, token: string): Promise<string> {
+		console.log('🧠 Generating plan with Gemini 3 Pro Preview...')
+		const projectId = 'x-micron-469410-g7'
+		const location = 'global' // gemini-3-pro-preview might need 'us-central1' or 'global', let's try global first or check docs. 
+		// Actually, for preview models, it's often us-central1. But let's stick to global if that's what we use elsewhere.
+		// Wait, the existing code uses 'global' for the live model.
+		// Let's try 'us-central1' for the REST API as it's safer for previews.
+		const url = `https://aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google/models/gemini-3-pro-preview:generateContent`
+
+		const response = await fetch(url, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'Authorization': `Bearer ${token}`
+			},
+			body: JSON.stringify({
+				contents: [{
+					role: 'user',
+					parts: [{
+						text: `You are an expert technical illustrator and systems architect.
+Your goal is to plan a diagram based on the user's request.
+Analyze the request and describe the exact diagram to be drawn.
+Specify:
+1. The layout and structure.
+2. The specific shapes to use (rectangles, circles, arrows, etc.).
+3. The colors and styles. IMPORTANT: Always specify the 'fill' (none, semi, solid, pattern) and 'color' (black, blue, red, green, etc.) for every shape.
+4. The text labels.
+
+User Request: "${prompt}"
+
+Provide a clear, detailed, step-by-step plan for drawing this diagram.
+Do not output JSON or code. Just a descriptive plan.`
+					}]
+				}],
+				generationConfig: {
+					temperature: 0.7,
+					maxOutputTokens: 2048
+				}
+			})
+		})
+
+		if (!response.ok) {
+			const error = await response.text()
+			console.error('❌ Planner failed:', error)
+			throw new Error(`Planner failed: ${response.statusText}`)
+		}
+
+		const data = await response.json() as any
+		const plan = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+		console.log('📝 Plan generated:', plan)
+		return plan
 	}
 
 	/**
