@@ -1,4 +1,4 @@
-import { FormEventHandler, useState } from 'react'
+import React, { FormEventHandler, useState } from 'react'
 import { Editor, useValue } from 'tldraw'
 import { AGENT_MODEL_DEFINITIONS, AgentModelName } from '../../worker/models'
 import { TldrawAgent } from '../agent/TldrawAgent'
@@ -40,24 +40,28 @@ export function ChatInput({
 	const [isRecording, setIsRecording] = useState(false)
 	const [vadStatus, setVadStatus] = useState('')
 
+	const vadStopRef = React.useRef<(() => void) | null>(null)
+
 	const handleMicClick = async () => {
 		if (isRecording) {
-			// Stop recording logic if needed, or just let VAD handle it
 			setIsRecording(false)
 			setVadStatus('')
-			// You might want to stop the stream here
+			if (vadStopRef.current) {
+				vadStopRef.current()
+				vadStopRef.current = null
+			}
 		} else {
 			setIsRecording(true)
 			const { startVad } = await import('../utils/vad')
-			startVad(
+			const stopVad = await startVad(
 				(audioBuffer) => {
-					// Send audio buffer to backend via agent
 					agent.sendAudio(audioBuffer)
 				},
 				(status) => {
 					setVadStatus(status)
 				}
 			)
+			vadStopRef.current = stopVad
 		}
 	}
 

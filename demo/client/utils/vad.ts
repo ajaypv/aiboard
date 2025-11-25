@@ -40,4 +40,11 @@ export async function startVad(onAudioBuffer: (buffer: ArrayBuffer) => void, onS
         },
     });
     micVad.start();
+    return () => {
+        micVad.pause();
+        // micVad.destroy(); // If destroy is available, otherwise pause is usually enough or we can stop the stream
+        if (window.stream) {
+            window.stream.getTracks().forEach(track => track.stop());
+        }
+    };
 }
