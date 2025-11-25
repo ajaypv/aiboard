@@ -712,6 +712,14 @@ export class TldrawAgent {
 
 		return false
 	}
+	/**
+	 * Send audio buffer to the backend.
+	 * @param audioBuffer The audio buffer to send.
+	 */
+	sendAudio(audioBuffer: ArrayBuffer) {
+		// This will be implemented when we set up the WebSocket
+		console.log('Sending audio buffer:', audioBuffer)
+	}
 }
 
 /**

@@ -12,13 +12,16 @@ export function ChatInput({
 	agent,
 	handleSubmit,
 	inputRef,
+	inputValue,
+	setInputValue,
 }: {
 	agent: TldrawAgent
 	handleSubmit: FormEventHandler<HTMLFormElement>
 	inputRef: React.RefObject<HTMLTextAreaElement>
+	inputValue: string
+	setInputValue: (value: string) => void
 }) {
 	const { editor } = agent
-	const [inputValue, setInputValue] = useState('')
 	const isGenerating = useValue('isGenerating', () => agent.isGenerating(), [agent])
 
 	const isContextToolActive = useValue(
@@ -33,6 +36,30 @@ export function ChatInput({
 	const selectedShapes = useValue('selectedShapes', () => editor.getSelectedShapes(), [editor])
 	const contextItems = useValue(agent.$contextItems)
 	const modelName = useValue(agent.$modelName)
+
+	const [isRecording, setIsRecording] = useState(false)
+	const [vadStatus, setVadStatus] = useState('')
+
+	const handleMicClick = async () => {
+		if (isRecording) {
+			// Stop recording logic if needed, or just let VAD handle it
+			setIsRecording(false)
+			setVadStatus('')
+			// You might want to stop the stream here
+		} else {
+			setIsRecording(true)
+			const { startVad } = await import('../utils/vad')
+			startVad(
+				(audioBuffer) => {
+					// Send audio buffer to backend via agent
+					agent.sendAudio(audioBuffer)
+				},
+				(status) => {
+					setVadStatus(status)
+				}
+			)
+		}
+	}
 
 	return (
 		<div className="chat-input">
@@ -80,7 +107,7 @@ export function ChatInput({
 					ref={inputRef}
 					name="input"
 					autoComplete="off"
-					placeholder="Ask, learn, brainstorm, draw"
+					placeholder={vadStatus || "Ask, learn, brainstorm, draw"}
 					value={inputValue}
 					onInput={(e) => setInputValue(e.currentTarget.value)}
 					onKeyDown={(e) => {
@@ -114,6 +141,14 @@ export function ChatInput({
 							<ChevronDownIcon />
 						</div>
 					</div>
+					<button
+						type="button"
+						className={`chat-input-mic ${isRecording ? 'recording' : ''}`}
+						onClick={handleMicClick}
+						title="Voice Input"
+					>
+						{isRecording ? '🔴' : '🎤'}
+					</button>
 					<button className="chat-input-submit" disabled={inputValue === '' && !isGenerating}>
 						{isGenerating && inputValue === '' ? '◼' : '⬆'}
 					</button>

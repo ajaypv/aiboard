@@ -4,6 +4,7 @@ import { AutoRouter, cors, error, IRequest } from 'itty-router'
 import { Environment } from './environment'
 import { live } from './routes/live'
 import { stream } from './routes/stream'
+import { voice } from './routes/voice'
 
 const { preflight, corsify } = cors({ origin: '*' })
 
@@ -17,6 +18,7 @@ const router = AutoRouter<IRequest, [env: Environment, ctx: ExecutionContext]>({
 })
 	.post('/stream', stream)
 	.get('/live', live)
+	.get('/voice', voice)
 
 export default class extends WorkerEntrypoint<Environment> {
 	override fetch(request: Request): Promise<Response> {
@@ -26,3 +28,4 @@ export default class extends WorkerEntrypoint<Environment> {
 
 // Make the durable object available to the cloudflare worker
 export { AgentDurableObject } from './do/AgentDurableObject'
+export { VoiceDurableObject } from './do/VoiceDurableObject'
