@@ -1,6 +1,7 @@
 name = "agent-template"
 main = "worker/worker.ts"
 compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat"]
 assets = { not_found_handling = "single-page-application" }
 preview_urls = true
 
@@ -16,6 +17,7 @@ custom_domain = true
 bindings = [
     { name = "AGENT_DURABLE_OBJECT", class_name = "AgentDurableObject" },
     { name = "VOICE_DURABLE_OBJECT", class_name = "VoiceDurableObject" },
+    { name = "ChatAgent", class_name = "ChatAgent" },
 ]
 
 # Cloudflare AI binding for speech-to-text
@@ -25,14 +27,12 @@ binding = "AI"
 # Durable objects require migrations to create/modify/delete them
 [[migrations]]
 tag = "v1"
-new_classes = ["TldrawAiDurableObject"]
+new_classes = ["AgentDurableObject"]
 
 [[migrations]]
 tag = "v2"
-renamed_classes = [
-    { from = "TldrawAiDurableObject", to = "AgentDurableObject" },
-]
+new_classes = ["VoiceDurableObject"]
 
 [[migrations]]
 tag = "v3"
-new_classes = ["VoiceDurableObject"]
+new_sqlite_classes = ["ChatAgent"]

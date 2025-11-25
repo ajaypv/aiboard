@@ -74,10 +74,6 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 	useEffect(() => {
 		const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 		const host = window.location.host
-		// Assuming the worker is serving the frontend or we know the worker URL. 
-		// For dev, it might be different ports. 
-		// Let's assume relative path works if served from same origin, or use env var.
-		// For this demo, we'll try to connect to the same host/port but with /voice
 		const wsUrl = `${protocol}//${host}/voice`
 
 		const ws = new WebSocket(wsUrl)
