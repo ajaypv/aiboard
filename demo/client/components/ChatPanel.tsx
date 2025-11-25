@@ -11,15 +11,9 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 	const inputRef = useRef<HTMLTextAreaElement>(null)
 	const modelName = useValue(agent.$modelName)
 
-	const handleSubmit = useCallback<FormEventHandler<HTMLFormElement>>(
-		async (e) => {
-			e.preventDefault()
-			if (!inputRef.current) return
-			const formData = new FormData(e.currentTarget)
-			const value = formData.get('input') as string
-
-			// If the user's message is empty, just cancel the current request (if there is one)
-			if (value === '') {
+	const handleSendMessage = useCallback(
+		async (message: string) => {
+			if (message === '') {
 				agent.cancel()
 				return
 			}
@@ -30,12 +24,11 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 				agent.$todoList.set([])
 			}
 
-			// Grab the user query and clear the chat input
-			const message = value
+			// Clear context and input
 			const contextItems = agent.$contextItems.get()
 			agent.$contextItems.set([])
-			inputRef.current.value = ''
-			setInputValue('') // Clear the state-managed input value as well
+			if (inputRef.current) inputRef.current.value = ''
+			setInputValue('')
 
 			// Prompt the agent
 			const selectedShapes = editor
@@ -54,6 +47,17 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 		[agent, modelName, editor]
 	)
 
+	const handleSubmit = useCallback<FormEventHandler<HTMLFormElement>>(
+		async (e) => {
+			e.preventDefault()
+			if (!inputRef.current) return
+			const formData = new FormData(e.currentTarget)
+			const value = formData.get('input') as string
+			await handleSendMessage(value)
+		},
+		[handleSendMessage]
+	)
+
 	function handleNewChat() {
 		agent.reset()
 	}
@@ -67,9 +71,17 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 	}
 
 	const [inputValue, setInputValue] = useState('')
+	const [isAutoSend, setIsAutoSend] = useState(true) // Default to auto-send
 
 	// Audio WebSocket
 	const audioWsRef = useRef<WebSocket | null>(null)
+	const handleSendMessageRef = useRef(handleSendMessage)
+	const isAutoSendRef = useRef(isAutoSend)
+
+	useEffect(() => {
+		handleSendMessageRef.current = handleSendMessage
+		isAutoSendRef.current = isAutoSend
+	}, [handleSendMessage, isAutoSend])
 
 	useEffect(() => {
 		const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -87,7 +99,13 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 			const data = JSON.parse(event.data)
 			if (data.type === 'text') {
 				console.log('Received text:', data.text)
-				setInputValue(prev => prev ? prev + ' ' + data.text : data.text)
+				// Auto-send the text if enabled
+				if (handleSendMessageRef.current && isAutoSendRef.current) {
+					handleSendMessageRef.current(data.text)
+				} else {
+					// Otherwise just update the input
+					setInputValue(prev => prev ? prev + ' ' + data.text : data.text)
+				}
 			} else if (data.type === 'audio') {
 				console.log('Received audio')
 				const { playAudioBuffer, base64ToArrBuff } = await import('../utils/audio')
@@ -120,6 +138,14 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 		<div className="chat-panel tl-theme__dark">
 			<div className="chat-header">
 				<NewChatButton />
+				<button
+					className="auto-send-toggle"
+					onClick={() => setIsAutoSend(!isAutoSend)}
+					title={isAutoSend ? "Auto-send enabled" : "Auto-send disabled"}
+					style={{ marginLeft: 'auto', marginRight: '10px', background: 'none', border: 'none', cursor: 'pointer', opacity: isAutoSend ? 1 : 0.5 }}
+				>
+					{isAutoSend ? '⚡' : '🖐️'}
+				</button>
 			</div>
 			<ChatHistory agent={agent} />
 			<div className="chat-input-container">
