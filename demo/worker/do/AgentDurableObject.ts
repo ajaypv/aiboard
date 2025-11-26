@@ -1,19 +1,16 @@
 import { DurableObject } from 'cloudflare:workers'
 import { AutoRouter, error } from 'itty-router'
-import { AgentAction } from '../../shared/types/AgentAction'
-import { AgentPrompt } from '../../shared/types/AgentPrompt'
-import { Streaming } from '../../shared/types/Streaming'
+import { getAgentByName } from 'agents'
 import { Environment } from '../environment'
-import { AgentService } from './AgentService'
-import { buildSystemPrompt } from '../prompt/buildSystemPrompt'
+import { PlannerAgent } from '../agents/PlannerAgent'
+import { ExecutorAgent } from '../agents/ExecutorAgent'
+import { VerifierAgent } from '../agents/VerifierAgent'
 
 export class AgentDurableObject extends DurableObject<Environment> {
-	service: AgentService
 	private activeSessions: Map<WebSocket, any> = new Map()
 
 	constructor(ctx: DurableObjectState, env: Environment) {
 		super(ctx, env)
-		this.service = new AgentService(this.env) // swap this with your own service
 	}
 
 	private readonly router = AutoRouter({
@@ -23,426 +20,175 @@ export class AgentDurableObject extends DurableObject<Environment> {
 		},
 	}).post('/stream', (request) => this.stream(request))
 
-	// `fetch` is the entry point for all requests to the Durable Object
 	override fetch(request: Request): Response | Promise<Response> {
-		console.log('🎯 DO fetch called, URL:', request.url)
-
-		// Check for WebSocket upgrade
 		const upgradeHeader = request.headers.get('Upgrade')
-		console.log('🔍 DO Upgrade header:', upgradeHeader)
-
 		if (upgradeHeader === 'websocket') {
-			console.log('✅ DO detected WebSocket upgrade request')
-
-			// Create WebSocket pair
 			const pair = new WebSocketPair()
 			const [client, server] = Object.values(pair)
-
-			console.log('🔗 DO created WebSocket pair')
-
-			// Accept the server-side WebSocket
-			// This connects it to the webSocketMessage handler
 			this.ctx.acceptWebSocket(server)
-			console.log('✅ DO accepted server WebSocket - messages will route to webSocketMessage()')
-
-			// Return the client-side WebSocket
-			return new Response(null, {
-				status: 101,
-				// @ts-ignore
-				webSocket: client,
-			})
+			return new Response(null, { status: 101, webSocket: client })
 		}
-
-		console.log('📮 DO routing to normal handler')
 		return this.router.fetch(request)
 	}
 
-	/**
-	 * Stream changes from the model.
-	 *
-	 * @param request - The request object containing the prompt.
-	 * @returns A Promise that resolves to a Response object containing the streamed changes.
-	 */
 	private async stream(request: Request): Promise<Response> {
-		const encoder = new TextEncoder()
-		const { readable, writable } = new TransformStream()
-		const writer = writable.getWriter()
-
-		const response: { changes: Streaming<AgentAction>[] } = { changes: [] }
-
-			; (async () => {
-				try {
-					const prompt = (await request.json()) as AgentPrompt
-
-					for await (const change of this.service.stream(prompt)) {
-						response.changes.push(change)
-						const data = `data: ${JSON.stringify(change)}\n\n`
-						await writer.write(encoder.encode(data))
-						await writer.ready
-					}
-					await writer.close()
-				} catch (error: any) {
-					console.error('Stream error:', error)
-
-					// Send error through the stream
-					const errorData = `data: ${JSON.stringify({ error: error.message })}\n\n`
-					try {
-						await writer.write(encoder.encode(errorData))
-						await writer.close()
-					} catch (writeError) {
-						await writer.abort(writeError)
-					}
-				}
-			})()
-
-		return new Response(readable, {
-			headers: {
-				'Content-Type': 'text/event-stream',
-				'Cache-Control': 'no-cache, no-transform',
-				Connection: 'keep-alive',
-				'X-Accel-Buffering': 'no',
-				'Transfer-Encoding': 'chunked',
-				'Access-Control-Allow-Origin': '*',
-				'Access-Control-Allow-Methods': 'POST, OPTIONS',
-				'Access-Control-Allow-Headers': 'Content-Type',
-			},
-		})
+		// Keep existing stream logic for backward compatibility if needed, 
+		// or replace with agent calls. For now, we focus on WebSocket.
+		return new Response('Stream endpoint deprecated in favor of WebSocket', { status: 400 })
 	}
 
-	/**
-	 * Handle incoming WebSocket messages for Live API
-	 */
 	override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-		console.log('📨 DO received WebSocket message from client')
-
 		try {
-			const promptData = JSON.parse(message as string)
-			console.log('✅ Parsed prompt data')
+			const data = JSON.parse(message as string)
+			const sessionId = data.sessionId || ('session-' + this.ctx.id.toString())
+			const isSuggesterEnabled = data.isSuggesterEnabled
+			console.log('🔹 AgentDO: Using session ID:', sessionId)
+			console.log('🔹 AgentDO: Suggester enabled:', isSuggesterEnabled)
 
-			// Get auth token for Vertex AI
-			const token = await this.getVertexAIToken()
-			console.log('🔑 Got Vertex AI auth token')
+			// 1. Get Agents
+			const planner = (await getAgentByName(this.env.PlannerAgent, sessionId)) as DurableObjectStub<PlannerAgent>
+			const executor = (await getAgentByName(this.env.ExecutorAgent, sessionId)) as DurableObjectStub<ExecutorAgent>
+			const verifier = (await getAgentByName(this.env.VerifierAgent, sessionId)) as DurableObjectStub<VerifierAgent>
 
-			// Get user prompt directly without planning phase
-			const finalPrompt = this.getUserMessage(promptData)
+			// 2. Forward user input to Planner
+			const userText = data.messages?.messages?.[0] || ''
+			console.log('🔹 AgentDO: Received user text:', userText)
 
-			// Connect to Vertex AI Live API
-			const vertexWsUrl = `wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent?access_token=${encodeURIComponent(token)}`
-			console.log('🌐 Connecting to Vertex AI Live API...')
+			if (userText) {
+				console.log('🔹 AgentDO: Adding message to planner...')
 
-			const vertexWS = new WebSocket(vertexWsUrl)
+				// Extract shapes from contextItems
+				const contextItemsPart = data.contextItems
+				const contextShapes = contextItemsPart?.items?.flatMap((item: any) => {
+					if (item.type === 'shape') return [item.shape]
+					if (item.type === 'shapes') return item.shapes
+					return []
+				}) || []
 
-			// Accumulate text from streaming responses
-			let accumulatedText = ''
-			let sentActionCount = 0
-			let hasVerified = false
+				// Extract shapes from selectedShapes
+				const selectedShapesPart = data.selectedShapes
+				const selectedShapes = selectedShapesPart?.shapes || []
 
-			vertexWS.addEventListener('open', () => {
-				console.log('✅ Connected to Vertex AI')
+				// Combine all known shapes
+				const allShapes = [...contextShapes, ...selectedShapes]
 
-				// Send setup message
-				const setupMessage = {
-					setup: {
-						model: 'projects/x-micron-469410-g7/locations/global/publishers/google/models/gemini-2.0-flash-live-preview-04-09',
-						generationConfig: {
-							responseModalities: ['TEXT'],
-						},
-						systemInstruction: {
-							parts: [{ text: this.getSystemPrompt(promptData) }]
+				// Extract bounds
+				const viewportBoundsPart = data.viewportBounds
+				const bounds = viewportBoundsPart?.agentBounds || null
+
+				// Pass context to planner
+				await (planner as any).addMessage('user', userText, allShapes, bounds)
+
+				// 3. Check for new tasks
+				console.log('🔹 AgentDO: Checking planner state...')
+				const plannerState = await (planner as any).getState()
+				const todoList = plannerState.todoList
+				console.log('🔹 AgentDO: Current todo list:', JSON.stringify(todoList))
+
+				// Find todo items
+				const todoItem = todoList.find((item: any) => item.status === 'todo')
+				if (todoItem) {
+					console.log('🔹 AgentDO: Found todo item:', todoItem.text)
+					// 4. Execute Task
+					ws.send(JSON.stringify({
+						type: 'action',
+						action: {
+							_type: 'message',
+							message: `Planning task: ${todoItem.text}`,
+							complete: true,
+							time: 0
 						}
-					}
-				}
+					}))
 
-				console.log('📤 Sending setup to Vertex AI:', JSON.stringify(setupMessage, null, 2))
-				vertexWS.send(JSON.stringify(setupMessage))
-				console.log('✅ Setup sent successfully')
+					console.log('🔹 AgentDO: Calling executor...')
+					const actions = await (executor as any).executeTask(todoItem.text, allShapes, bounds)
+					console.log('🔹 AgentDO: Executor returned actions:', actions?.length)
 
-				// Send user message
-				const userMessage = {
-					clientContent: {
-						turns: [{
-							role: 'user',
-							parts: [{ text: finalPrompt }]
-						}],
-						turnComplete: true
-					}
-				}
+					// Stream actions to client
+					if (actions && actions.length > 0) {
+						for (const action of actions) {
+							console.log('🔹 AgentDO: Sending action to client:', action._type)
 
-				console.log('📤 Sending user message to Vertex AI:', JSON.stringify(userMessage, null, 2))
-				vertexWS.send(JSON.stringify(userMessage))
-				console.log('✅ User message sent successfully')
-			})
+							ws.send(JSON.stringify({
+								type: 'action',
+								action: {
+									...action,
+									complete: true,
+									time: 0
+								}
+							}))
+						}
 
-			vertexWS.addEventListener('message', (event) => {
-				console.log('📨 Received from Vertex AI')
-				try {
-					// Decode ArrayBuffer if needed
-					let jsonString: string
-					if (event.data instanceof ArrayBuffer) {
-						const decoder = new TextDecoder()
-						jsonString = decoder.decode(event.data)
+						// Mark task as done after successful execution
+						console.log('🔹 AgentDO: Task executed successfully. Marking as done:', todoItem.id)
+						await (planner as any).updateTaskStatus(todoItem.id, 'done')
+
 					} else {
-						jsonString = event.data
+						console.log('🔹 AgentDO: No actions returned from executor. Forcing task completion to prevent loop.')
+						// Force mark as done to prevent infinite loop
+						await (planner as any).updateTaskStatus(todoItem.id, 'done')
+
+						ws.send(JSON.stringify({
+							type: 'action',
+							action: {
+								_type: 'message',
+								message: `Task completed (no actions generated): ${todoItem.text}`,
+								complete: true,
+								time: 0
+							}
+						}))
 					}
 
-					const aiResponse = JSON.parse(jsonString)
+					// 5. Verify / Suggest
+					if (isSuggesterEnabled) {
+						console.log('🔹 AgentDO: Calling suggester (verifier)...')
+						const suggestions = await (verifier as any).verifyActions(todoItem.text, actions, allShapes, bounds)
+						console.log('🔹 AgentDO: Suggester returned actions:', suggestions?.length)
 
-					// Accumulate text from model turn parts
-					if (aiResponse.serverContent?.modelTurn?.parts) {
-						for (const part of aiResponse.serverContent.modelTurn.parts) {
-							if (part.text) {
-								accumulatedText += part.text
-								console.log(`📝 Accumulated text length: ${accumulatedText.length}`)
-
-								// Try to extract and send new actions incrementally
-								const actions = this.extractActionsFromPartialText(accumulatedText)
-								if (actions.length > sentActionCount) {
-									const newActions = actions.slice(sentActionCount)
-									for (const action of newActions) {
-										// Ensure shapeId exists
-										if (action.shape && !action.shape.shapeId) {
-											action.shape.shapeId = 'shape'
-										}
-
-										ws.send(JSON.stringify({
-											type: 'action',
-											action: {
-												...action,
-												complete: true,
-												time: 0
-											}
-										}))
-										console.log('📤 Sent incremental action:', action._type)
-									}
-									sentActionCount = actions.length
-								}
-							}
-						}
-					}
-
-					// When turn is complete
-					if (aiResponse.serverContent?.turnComplete) {
-						console.log('✅ Turn complete')
-
-						if (!hasVerified) {
-							console.log('🔍 Starting verification phase...')
-							hasVerified = true
-
-							// Send verification prompt
-							const verifyMessage = {
-								clientContent: {
-									turns: [{
-										role: 'user',
-										parts: [{ text: "Review your drawing. Is it correct based on the plan? If there are any missing shapes or errors, fix them now. If it is correct, say 'Verification Complete'." }]
-									}],
-									turnComplete: true
-								}
-							}
-							vertexWS.send(JSON.stringify(verifyMessage))
-
-							// Notify client
+						if (suggestions && suggestions.length > 0) {
 							ws.send(JSON.stringify({
 								type: 'action',
 								action: {
 									_type: 'message',
-									message: '🔍 Verifying drawing...',
+									message: `Suggester: Found ${suggestions.length} improvements. Applying...`,
 									complete: true,
 									time: 0
 								}
 							}))
 
-							// Reset for next turn
-							accumulatedText = ''
-							sentActionCount = 0
+							for (const action of suggestions) {
+								console.log('🔹 AgentDO: Sending suggestion to client:', action._type)
+								ws.send(JSON.stringify({
+									type: 'action',
+									action: {
+										...action,
+										complete: true,
+										time: 0
+									}
+								}))
+							}
 						} else {
-							// Send completion
-							ws.send(JSON.stringify({ type: 'complete' }))
-							console.log('✅ Verification complete, closing Vertex WS')
-							vertexWS.close()
+							console.log('🔹 AgentDO: No suggestions found.')
 						}
+					} else {
+						console.log('🔹 AgentDO: Suggester disabled by user. Skipping.')
 					}
-
-					// Log any errors from Vertex AI
-					if (aiResponse.error) {
-						console.error('❌ Vertex AI returned error:', aiResponse.error)
-						ws.send(JSON.stringify({
-							type: 'error',
-							error: aiResponse.error.message || 'Vertex AI error'
-						}))
-					}
-				} catch (err: any) {
-					console.error('❌ Error parsing AI response:', err)
-					console.error('❌ Error stack:', err.stack)
+				} else {
+					console.log('🔹 AgentDO: No todo items found')
 				}
-			})
-
-			vertexWS.addEventListener('error', (error) => {
-				console.error('❌ Vertex AI WebSocket error:', error)
-				console.error('❌ Error details:', JSON.stringify(error))
-				ws.send(JSON.stringify({
-					type: 'error',
-					error: 'Live API connection failed'
-				}))
-			})
-
-			vertexWS.addEventListener('close', (event) => {
-				console.log('🔌 Vertex AI WebSocket closed')
-				console.log('📊 Close code:', event.code)
-				console.log('📝 Close reason:', event.reason)
-				console.log('🔍 Was clean:', event.wasClean)
-			})
+			}
 
 		} catch (error: any) {
-			console.error('❌ WebSocket message error:', error)
-			console.error('❌ Error stack:', error.stack)
-			ws.send(JSON.stringify({
-				type: 'error',
-				error: error.message
-			}))
+			console.error('WebSocket error:', error)
+			ws.send(JSON.stringify({ type: 'error', error: error.message }))
 		}
 	}
 
-	/**
-	 * Get Vertex AI auth token
-	 */
-	private async getVertexAIToken(): Promise<string> {
-		const LAMBDA_AUTH_URL = 'https://cgwuuuckpa.execute-api.ap-south-1.amazonaws.com/default/auth-lambad'
-		const response = await fetch(LAMBDA_AUTH_URL)
-		const authData = await response.json() as any
-		return authData.auth?.access_token || authData.access_token
-	}
-
-	/**
-	 * Get system prompt from prompt data
-	 */
-	private getSystemPrompt(promptData: any): string {
-		return buildSystemPrompt(promptData)
-	}
-
-	/**
-	 * Get user message from prompt data
-	 */
-	private getUserMessage(promptData: any): string {
-		const messages = promptData.messages?.messages || []
-		return messages.join('\n') || 'Hello'
-	}
-
-	/**
-	 * Parse actions from AI text response
-	 */
-	private parseActionsFromText(text: string): any[] {
-		// Try to extract JSON from text (remove markdown code fences if present)
-		try {
-			// Remove markdown code fences
-			let cleanedText = text.replace(/```json\s*/g, '').replace(/```\s*/g, '')
-
-			// Try to find JSON object or array
-			const jsonMatch = cleanedText.match(/\{[\s\S]*\}/)
-			if (jsonMatch) {
-				const data = JSON.parse(jsonMatch[0])
-
-				// If it has an actions array, extract and mark each as complete
-				if (data.actions && Array.isArray(data.actions)) {
-					return data.actions.map((action: any) => ({
-						...action,
-						complete: true,
-						time: 0
-					}))
-				}
-
-				// If it's a single action object with _type, mark it as complete
-				if (data._type) {
-					return [{
-						...data,
-						complete: true,
-						time: 0
-					}]
-				}
-			}
-		} catch (err) {
-			console.log('⚠️ Could not parse actions from text, returning as message')
-		}
-
-		// Return as message action if not JSON
-		return [{
-			_type: 'message',
-			message: text,
-			complete: true,
-			time: 0
-		}]
-	}
-
-
-
-	/**
-	 * Extract actions from partial text stream
-	 */
-	private extractActionsFromPartialText(text: string): any[] {
-		const actions: any[] = []
-		try {
-			// Remove markdown
-			let clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '')
-
-			// Find array start
-			const arrayStart = clean.indexOf('[')
-			if (arrayStart === -1) return []
-
-			let depth = 0
-			let start = -1
-			let inString = false
-
-			for (let i = arrayStart + 1; i < clean.length; i++) {
-				const char = clean[i]
-
-				if (char === '"' && clean[i - 1] !== '\\') {
-					inString = !inString
-					continue
-				}
-
-				if (inString) continue
-
-				if (char === '{') {
-					if (depth === 0) start = i
-					depth++
-				} else if (char === '}') {
-					depth--
-					if (depth === 0 && start !== -1) {
-						// Found a potential object
-						const jsonStr = clean.substring(start, i + 1)
-						try {
-							const action = JSON.parse(jsonStr)
-							if (action._type) {
-								actions.push(action)
-							}
-						} catch (e) {
-							// Ignore invalid JSON
-						}
-						start = -1
-					}
-				}
-			}
-		} catch (e) {
-			// Ignore errors
-		}
-		return actions
-	}
-
-	/**
-	 * Handle WebSocket close
-	 */
 	override async webSocketClose(ws: WebSocket, code: number, reason: string) {
-		console.log(`🔌 DO WebSocket closed. Code: ${code}, Reason: ${reason}`)
 		this.activeSessions.delete(ws)
-		console.log(`📊 Active sessions remaining: ${this.activeSessions.size}`)
 	}
 
-	/**
-	 * Handle WebSocket errors
-	 */
 	override async webSocketError(ws: WebSocket, error: any) {
-		console.error('❌ DO WebSocket error:', error)
-		console.error('❌ Error details:', error?.message, error?.stack)
 		this.activeSessions.delete(ws)
-		console.log(`📊 Active sessions after error: ${this.activeSessions.size}`)
 	}
 }

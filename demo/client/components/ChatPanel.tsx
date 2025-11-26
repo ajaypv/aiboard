@@ -146,6 +146,14 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 				>
 					{isAutoSend ? '⚡' : '🖐️'}
 				</button>
+				<button
+					className="suggester-toggle"
+					onClick={() => agent.$isSuggesterEnabled.set(!agent.$isSuggesterEnabled.get())}
+					title={useValue(agent.$isSuggesterEnabled) ? "Suggester enabled" : "Suggester disabled"}
+					style={{ marginRight: '10px', background: 'none', border: 'none', cursor: 'pointer', opacity: useValue(agent.$isSuggesterEnabled) ? 1 : 0.5 }}
+				>
+					{useValue(agent.$isSuggesterEnabled) ? '✨' : '⚪'}
+				</button>
 			</div>
 			<ChatHistory agent={agent} />
 			<div className="chat-input-container">

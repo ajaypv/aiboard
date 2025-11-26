@@ -22,4 +22,7 @@ export type BaseAgentPrompt<T extends BasePromptPart = BasePromptPart> = {
 /**
  * An object with all parts of the prompt, defined by: {@link _PROMPT_PART_UTILS}.
  */
-export type AgentPrompt = BaseAgentPrompt<PromptPart>
+export type AgentPrompt = BaseAgentPrompt<PromptPart> & {
+	sessionId?: string
+	isSuggesterEnabled?: boolean
+}

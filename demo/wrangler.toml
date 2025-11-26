@@ -18,6 +18,9 @@ bindings = [
     { name = "AGENT_DURABLE_OBJECT", class_name = "AgentDurableObject" },
     { name = "VOICE_DURABLE_OBJECT", class_name = "VoiceDurableObject" },
     { name = "ChatAgent", class_name = "ChatAgent" },
+    { name = "PlannerAgent", class_name = "PlannerAgent" },
+    { name = "ExecutorAgent", class_name = "ExecutorAgent" },
+    { name = "VerifierAgent", class_name = "VerifierAgent" },
 ]
 
 # Cloudflare AI binding for speech-to-text
@@ -36,3 +39,7 @@ new_classes = ["VoiceDurableObject"]
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["ChatAgent"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["PlannerAgent", "ExecutorAgent", "VerifierAgent"]

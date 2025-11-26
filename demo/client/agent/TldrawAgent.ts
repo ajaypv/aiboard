@@ -115,6 +115,11 @@ export class TldrawAgent {
 	$modelName = atom<AgentModelName>('modelName', DEFAULT_MODEL_NAME)
 
 	/**
+	 * An atom that determines if the Suggester agent should run after execution.
+	 */
+	$isSuggesterEnabled = atom<boolean>('isSuggesterEnabled', false)
+
+	/**
 	 * Create a new tldraw agent.
 	 */
 	constructor({ editor, id, onError }: TldrawAgentOptions) {
@@ -275,7 +280,10 @@ export class TldrawAgent {
 			transformedParts.push(part)
 		}
 
-		return Object.fromEntries(transformedParts.map((part) => [part.type, part])) as AgentPrompt
+		return {
+			...Object.fromEntries(transformedParts.map((part) => [part.type, part])),
+			sessionId: this.sessionId
+		} as AgentPrompt
 	}
 
 	/**
@@ -557,6 +565,11 @@ export class TldrawAgent {
 	}
 
 	/**
+	 * The current session ID.
+	 */
+	sessionId = crypto.randomUUID()
+
+	/**
 	 * Reset the agent's chat and memory.
 	 * Cancel the current request if there's one active.
 	 */
@@ -569,6 +582,10 @@ export class TldrawAgent {
 		const viewport = this.editor.getViewportPageBounds()
 		this.$chatHistory.set([])
 		this.$chatOrigin.set({ x: viewport.x, y: viewport.y })
+
+		// Generate a new session ID
+		this.sessionId = crypto.randomUUID()
+		console.log('🔄 New session started:', this.sessionId)
 	}
 
 	/**
@@ -828,14 +845,15 @@ async function* streamAgent({
 	prompt,
 	signal,
 }: {
-	prompt: BaseAgentPrompt
+	prompt: AgentPrompt
 	signal: AbortSignal
 }): AsyncGenerator<Streaming<AgentAction>> {
 	// Check if using Live API (WebSocket-based)
 	// The prompt contains modelName part which has a 'name' property with the AgentModelName
+	// The prompt contains modelName part which has a 'name' property with the AgentModelName
 	let modelName: AgentModelName = DEFAULT_MODEL_NAME
-	if ((prompt as any).modelName?.name) {
-		modelName = (prompt as any).modelName.name
+	if (prompt.modelName?.name) {
+		modelName = prompt.modelName.name
 	}
 
 	console.log('Detected model:', modelName) // Debug logging
@@ -850,18 +868,22 @@ async function* streamAgent({
 
 		const ws = new WebSocket(wsUrl)
 
+		const payload = {
+			...prompt,
+			sessionId: (prompt as any).sessionId || crypto.randomUUID(), // Fallback if not passed
+			isSuggesterEnabled: (prompt as any).isSuggesterEnabled
+		}
+
+		ws.onopen = () => {
+			console.log('🔌 WebSocket connected')
+			ws.send(JSON.stringify(payload))
+		}
+
 		const queue: Streaming<AgentAction>[] = []
 		let resolveNext: ((value: IteratorResult<Streaming<AgentAction>>) => void) | null = null
 		let done = false
 
-		ws.onopen = () => {
-			console.log('✅ WebSocket connected')
-			// Send prompt via WebSocket
-			ws.send(JSON.stringify(prompt))
-			console.log('📤 Sent prompt to server')
-		}
-
-		ws.onmessage = (event) => {
+		ws.onmessage = async (event) => {
 			console.log('📨 Received WebSocket message:', event.data)
 			try {
 				const data = JSON.parse(event.data)

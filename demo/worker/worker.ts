@@ -11,6 +11,9 @@ import { voice } from './routes/voice'
 export { AgentDurableObject } from './do/AgentDurableObject'
 export { VoiceDurableObject } from './do/VoiceDurableObject'
 export { ChatAgent } from './agents/ChatAgent'
+export { PlannerAgent } from './agents/PlannerAgent'
+export { ExecutorAgent } from './agents/ExecutorAgent'
+export { VerifierAgent } from './agents/VerifierAgent'
 
 const { preflight, corsify } = cors({ origin: '*' })
 
