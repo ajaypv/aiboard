@@ -17,7 +17,7 @@ export class ExecutorAgent extends Agent<Environment, ExecutorState> {
         lastActions: []
     }
 
-    async executeTask(taskDescription: string, contextItems: any[] = [], bounds: any = null) {
+    async executeTask(taskDescription: string, contextItems: any[] = [], bounds: any = null): Promise<ReadableStream<Uint8Array>> {
         console.log('🔹 ExecutorAgent: Executing task:', taskDescription)
         this.setState({ ...this.state, currentTask: taskDescription })
 
@@ -34,17 +34,33 @@ export class ExecutorAgent extends Agent<Environment, ExecutorState> {
             You have been assigned a specific task from the Planner.
             
             Focus ONLY on visualizing this specific task.
-            Return a JSON object with an "actions" array containing the drawing commands.
+            
+            OUTPUT FORMAT:
+            Return a stream of JSON objects, where each object is an ACTION.
+            Do NOT wrap them in an "actions" array.
+            Output each JSON object on a NEW LINE.
+            
             Example:
-            {
-                "actions": [
-                    { "_type": "create-shape", "type": "geo", "x": 100, "y": 100, "props": { "w": 100, "h": 100, "geo": "rectangle", "color": "blue" } }
-                ]
-            }
+            { "_type": "create-shape", "type": "geo", "x": 100, "y": 100, "props": { "w": 100, "h": 100, "geo": "rectangle", "color": "blue" } }
+            { "_type": "create-shape", "type": "geo", "x": 250, "y": 100, "props": { "w": 100, "h": 100, "geo": "ellipse", "color": "red" } }
             `
             await this.client.connect(systemPrompt)
         }
 
+        const { readable, writable } = new TransformStream()
+        const writer = writable.getWriter()
+        const encoder = new TextEncoder()
+
+        // Start background processing
+        this.streamActions(taskDescription, contextItems, bounds, writer, encoder).catch(err => {
+            console.error('Background streaming error:', err)
+            writer.abort(err)
+        })
+
+        return readable
+    }
+
+    private async streamActions(taskDescription: string, contextItems: any[], bounds: any, writer: WritableStreamDefaultWriter, encoder: TextEncoder) {
         try {
             console.log('🔹 ExecutorAgent: Sending task to VertexAIClient...')
 
@@ -82,31 +98,82 @@ export class ExecutorAgent extends Agent<Environment, ExecutorState> {
             1. DO NOT generate "update-todo-list" actions. The Planner manages the list.
             2. JUST DRAW. Focus on "create", "update", "move", "connect" actions.
             3. IGNORE the instruction in the base prompt about creating a todo item first.
+            4. STREAM YOUR RESPONSE as separate JSON objects.
+            5. IMPORTANT: Do NOT pretty-print. Use COMPACT single-line JSON for each object.
+            6. Do NOT wrap in markdown code blocks.
             `
-            const text = await this.client.send(prompt)
-            console.log('🔹 ExecutorAgent: Received response:', text)
 
-            const jsonMatch = text.match(/\{[\s\S]*\}/)
-            if (jsonMatch) {
-                const data = JSON.parse(jsonMatch[0])
-                if (data.actions) {
-                    console.log('🔹 ExecutorAgent: Parsed actions:', data.actions.length)
-                    // Update state with actions for history/verification
-                    this.setState({
-                        ...this.state,
-                        lastActions: [...this.state.lastActions, ...data.actions]
-                    })
+            if (!this.client) throw new Error("Client not initialized")
 
-                    // Return actions to the caller (Orchestrator)
-                    return data.actions
+            let buffer = ''
+            for await (const chunk of this.client.stream(prompt)) {
+                console.log('🔹 ExecutorAgent: Received chunk:', JSON.stringify(chunk))
+                buffer += chunk
+
+                let startIndex = buffer.indexOf('{')
+                while (startIndex !== -1) {
+                    let parsed = false
+                    let balance = 0
+                    let endIndex = -1
+
+                    // Find the matching closing brace
+                    for (let i = startIndex; i < buffer.length; i++) {
+                        if (buffer[i] === '{') balance++
+                        else if (buffer[i] === '}') balance--
+
+                        if (balance === 0) {
+                            endIndex = i
+                            break
+                        }
+                    }
+
+                    if (endIndex !== -1) {
+                        // Found a complete block
+                        const potentialJson = buffer.slice(startIndex, endIndex + 1)
+                        try {
+                            const action = JSON.parse(potentialJson)
+                            console.log('🔹 ExecutorAgent: Yielding action:', action._type)
+
+                            // Update state
+                            this.setState({
+                                ...this.state,
+                                lastActions: [...this.state.lastActions, action]
+                            })
+
+                            await writer.write(encoder.encode(JSON.stringify(action) + '\n'))
+
+                            // Advance buffer past this object
+                            buffer = buffer.slice(endIndex + 1)
+                            parsed = true
+                        } catch (e) {
+                            console.warn('🔹 ExecutorAgent: Failed to parse block:', potentialJson, e)
+                            // If parse failed (e.g. brace inside string caused miscount), 
+                            // we skip this starting brace and try again.
+                            buffer = buffer.slice(startIndex + 1)
+                            parsed = true
+                        }
+                    } else {
+                        // Incomplete object, wait for more data
+                        break
+                    }
+
+                    // Look for next object
+                    if (parsed) {
+                        startIndex = buffer.indexOf('{')
+                    } else {
+                        break
+                    }
                 }
-            } else {
-                console.warn('🔹 ExecutorAgent: No JSON found in response')
             }
+
+            console.log('🔹 ExecutorAgent: Stream finished. Remaining buffer:', buffer)
+
         } catch (error) {
             console.error('ExecutorAgent error:', error)
             this.client = null
+            throw error
+        } finally {
+            await writer.close()
         }
-        return []
     }
 }

@@ -78,6 +78,83 @@ export class VertexAIClient {
         })
     }
 
+
+
+    private messageHandler: ((text: string) => void) | null = null
+    private errorHandler: ((error: Error) => void) | null = null
+    private completionHandler: (() => void) | null = null
+
+    async *stream(prompt: string): AsyncGenerator<string> {
+        if (!this.isConnected || !this.ws) {
+            throw new Error('VertexAIClient is not connected')
+        }
+
+        console.log('🌐 VertexAIClient: Streaming prompt...')
+
+        const queue: string[] = []
+        let resolveNext: ((value: IteratorResult<string>) => void) | null = null
+        let done = false
+        let error: Error | null = null
+
+        // Setup handlers
+        this.messageHandler = (text) => {
+            if (resolveNext) {
+                resolveNext({ value: text, done: false })
+                resolveNext = null
+            } else {
+                queue.push(text)
+            }
+        }
+
+        this.errorHandler = (err) => {
+            error = err
+            if (resolveNext) {
+                resolveNext({ value: undefined, done: true }) // Or throw
+                resolveNext = null
+            }
+        }
+
+        this.completionHandler = () => {
+            done = true
+            if (resolveNext) {
+                resolveNext({ value: undefined, done: true })
+                resolveNext = null
+            }
+        }
+
+        const userMessage = {
+            clientContent: {
+                turns: [{ role: 'user', parts: [{ text: prompt }] }],
+                turnComplete: true
+            }
+        }
+        this.ws.send(JSON.stringify(userMessage))
+
+        try {
+            while (true) {
+                if (error) throw error
+                if (queue.length > 0) {
+                    yield queue.shift()!
+                    continue
+                }
+                if (done) break
+
+                // Wait for next message
+                const result = await new Promise<IteratorResult<string>>((resolve) => {
+                    resolveNext = resolve
+                })
+
+                if (result.done) break
+                yield result.value
+            }
+        } finally {
+            // Cleanup
+            this.messageHandler = null
+            this.errorHandler = null
+            this.completionHandler = null
+        }
+    }
+
     private handleMessage(event: MessageEvent) {
         try {
             let jsonString: string
@@ -92,13 +169,20 @@ export class VertexAIClient {
             if (response.serverContent?.modelTurn?.parts) {
                 for (const part of response.serverContent.modelTurn.parts) {
                     if (part.text) {
-                        this.accumulatedText += part.text
+                        if (this.messageHandler) {
+                            this.messageHandler(part.text)
+                        } else {
+                            this.accumulatedText += part.text
+                        }
                     }
                 }
             }
 
             if (response.serverContent?.turnComplete) {
                 console.log('🌐 VertexAIClient: Turn complete.')
+                if (this.completionHandler) {
+                    this.completionHandler()
+                }
                 if (this.resolveResponse) {
                     this.resolveResponse(this.accumulatedText)
                     this.resolveResponse = null
@@ -108,14 +192,21 @@ export class VertexAIClient {
 
             if (response.error) {
                 console.error('🌐 VertexAIClient: Error response:', response.error)
+                const err = new Error(response.error.message)
+                if (this.errorHandler) {
+                    this.errorHandler(err)
+                }
                 if (this.rejectResponse) {
-                    this.rejectResponse(new Error(response.error.message))
+                    this.rejectResponse(err)
                     this.resolveResponse = null
                     this.rejectResponse = null
                 }
             }
-        } catch (e) {
+        } catch (e: any) {
             console.error('🌐 VertexAIClient: Parse error:', e)
+            if (this.errorHandler) {
+                this.errorHandler(e)
+            }
         }
     }
 

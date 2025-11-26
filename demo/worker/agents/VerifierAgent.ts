@@ -80,6 +80,12 @@ export class VerifierAgent extends Agent<Environment, VerifierState> {
             
             INSTRUCTION:
             Review the changes. If you have any suggestions (like changing color, moving shapes for better layout, etc.), generate the ACTIONS to perform those changes.
+            
+            SPECIFIC CHECKS:
+            1. **Unlinked Arrows**: Are there arrows pointing to nothing? If so, connect them to the nearest logical shape or delete them.
+            2. **Overlapping Shapes**: Are shapes overlapping in a messy way? Move them apart.
+            3. **Alignment**: Is the layout balanced?
+            
             If no changes are needed, return an empty "actions" array.
             `
             const text = await this.client.send(prompt)
