@@ -4,11 +4,13 @@ import { Environment } from '../environment';
 export class VoiceDurableObject extends DurableObject {
     declare env: Environment;
     msgHistory: Array<Object>;
+    sttModel: string;
 
     constructor(ctx: DurableObjectState, env: Environment) {
         super(ctx, env);
         this.env = env;
         this.msgHistory = [];
+        this.sttModel = '@cf/openai/whisper-tiny-en';
     }
 
     override async fetch(request: Request) {
@@ -21,19 +23,29 @@ export class VoiceDurableObject extends DurableObject {
         ws.addEventListener('message', async (event) => {
             // handle chat commands
             if (typeof event.data === 'string') {
-                const { type, data } = JSON.parse(event.data);
+                const { type, data, model } = JSON.parse(event.data);
                 if (type === 'cmd' && data === 'clear') {
                     this.msgHistory.length = 0; // clear chat history
+                } else if (type === 'config' && model) {
+                    this.sttModel = model;
+                    console.log('>> Switched STT model to:', this.sttModel);
                 }
                 return; // end processing here for this event type
             }
 
             // transcribe audio buffer to text (stt)
-            const { text } = await this.env.AI.run('@cf/openai/whisper-tiny-en', {
+            const { text } = await this.env.AI.run(this.sttModel as any, {
                 audio: [...new Uint8Array(event.data as ArrayBuffer)],
             });
             console.log('>>', text);
-            ws.send(JSON.stringify({ type: 'text', text })); // send transcription to client
+
+            // Get recent user history for context
+            const recentHistory = this.msgHistory
+                .filter(msg => (msg as any).role === 'user')
+                .slice(-5)
+                .map(msg => (msg as any).content);
+
+            ws.send(JSON.stringify({ type: 'text', text, context: recentHistory })); // send transcription to client
             this.msgHistory.push({ role: 'user', content: text });
 
             // run inference

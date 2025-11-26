@@ -60,6 +60,9 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 
 	function handleNewChat() {
 		agent.reset()
+		if (audioWsRef.current?.readyState === WebSocket.OPEN) {
+			audioWsRef.current.send(JSON.stringify({ type: 'cmd', data: 'clear' }))
+		}
 	}
 
 	function NewChatButton() {
@@ -72,16 +75,19 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 
 	const [inputValue, setInputValue] = useState('')
 	const [isAutoSend, setIsAutoSend] = useState(true) // Default to auto-send
+	const [sttModel, setSttModel] = useState('@cf/openai/whisper-tiny-en')
 
 	// Audio WebSocket
 	const audioWsRef = useRef<WebSocket | null>(null)
 	const handleSendMessageRef = useRef(handleSendMessage)
 	const isAutoSendRef = useRef(isAutoSend)
+	const sttModelRef = useRef(sttModel)
 
 	useEffect(() => {
 		handleSendMessageRef.current = handleSendMessage
 		isAutoSendRef.current = isAutoSend
-	}, [handleSendMessage, isAutoSend])
+		sttModelRef.current = sttModel
+	}, [handleSendMessage, isAutoSend, sttModel])
 
 	useEffect(() => {
 		const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -93,15 +99,25 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 
 		ws.onopen = () => {
 			console.log('Connected to Voice WebSocket')
+			// Send initial model config
+			ws.send(JSON.stringify({ type: 'config', model: sttModelRef.current }))
 		}
 
 		ws.onmessage = async (event) => {
 			const data = JSON.parse(event.data)
 			if (data.type === 'text') {
 				console.log('Received text:', data.text)
+
+				// Construct message with context if available
+				let messageToSend = data.text
+				if (data.context && data.context.length > 0) {
+					const contextStr = data.context.join(' ')
+					messageToSend = `[Voice Context: ${contextStr}] ${data.text}`
+				}
+
 				// Auto-send the text if enabled
 				if (handleSendMessageRef.current && isAutoSendRef.current) {
-					handleSendMessageRef.current(data.text)
+					handleSendMessageRef.current(messageToSend)
 				} else {
 					// Otherwise just update the input
 					setInputValue(prev => prev ? prev + ' ' + data.text : data.text)
@@ -123,6 +139,13 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 		}
 	}, [])
 
+	// Update model when changed
+	useEffect(() => {
+		if (audioWsRef.current?.readyState === WebSocket.OPEN) {
+			audioWsRef.current.send(JSON.stringify({ type: 'config', model: sttModel }))
+		}
+	}, [sttModel])
+
 	// Implement sendAudio on the agent
 	useEffect(() => {
 		agent.sendAudio = (audioBuffer: ArrayBuffer) => {
@@ -138,11 +161,23 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 		<div className="chat-panel tl-theme__dark">
 			<div className="chat-header">
 				<NewChatButton />
+				<select
+					value={sttModel}
+					onChange={(e) => setSttModel(e.target.value)}
+					style={{ marginLeft: 'auto', marginRight: '10px', background: '#2f2f2f', color: '#fff', border: 'none', borderRadius: '4px', padding: '2px 5px', maxWidth: '100px', fontSize: '10px' }}
+					title="Select Speech-to-Text Model"
+				>
+					<option value="@cf/openai/whisper-tiny-en">Whisper Tiny</option>
+					<option value="@cf/openai/whisper">Whisper Base</option>
+					<option value="@cf/openai/whisper-large-v3-turbo">Whisper Large v3 Turbo</option>
+					{/* Adding Deepgram option as requested, though it might fail if not supported by backend binding */}
+					<option value="@cf/deepgram/flux">Deepgram Flux (Nova-3)</option>
+				</select>
 				<button
 					className="auto-send-toggle"
 					onClick={() => setIsAutoSend(!isAutoSend)}
 					title={isAutoSend ? "Auto-send enabled" : "Auto-send disabled"}
-					style={{ marginLeft: 'auto', marginRight: '10px', background: 'none', border: 'none', cursor: 'pointer', opacity: isAutoSend ? 1 : 0.5 }}
+					style={{ marginRight: '10px', background: 'none', border: 'none', cursor: 'pointer', opacity: isAutoSend ? 1 : 0.5 }}
 				>
 					{isAutoSend ? '⚡' : '🖐️'}
 				</button>
