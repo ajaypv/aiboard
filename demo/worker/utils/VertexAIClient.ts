@@ -127,9 +127,27 @@ export class VertexAIClient {
         }
     }
 
+    private static cachedToken: string | null = null
+    private static tokenExpiry: number = 0
+
     private async getVertexAIToken(): Promise<string> {
+        const now = Date.now()
+        if (VertexAIClient.cachedToken && now < VertexAIClient.tokenExpiry) {
+            console.log('🌐 VertexAIClient: Using cached token')
+            return VertexAIClient.cachedToken
+        }
+
+        console.log('🌐 VertexAIClient: Fetching new token...')
         const response = await fetch(VertexAIClient.LAMBDA_AUTH_URL)
         const data = await response.json() as any
-        return data.auth?.access_token || data.access_token
+        const token = data.auth?.access_token || data.access_token
+
+        if (token) {
+            VertexAIClient.cachedToken = token
+            // Cache for 10 minutes (600,000 ms) - slightly less to be safe
+            VertexAIClient.tokenExpiry = now + 9 * 60 * 1000
+        }
+
+        return token
     }
 }

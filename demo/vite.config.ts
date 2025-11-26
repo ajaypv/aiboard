@@ -9,7 +9,9 @@ export default defineConfig(() => {
 	return {
 		plugins: [
 			zodLocalePlugin(fileURLToPath(new URL('./scripts/zod-locales-shim.js', import.meta.url))),
-			cloudflare(),
+			cloudflare({
+				persistState: true, // Use local mode instead of remote preview
+			}),
 			react(),
 		],
 	}

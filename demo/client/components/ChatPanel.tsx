@@ -110,7 +110,17 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 
 				// Construct message with context if available
 				let messageToSend = data.text
-				if (data.context && data.context.length > 0) {
+				if (data.context) {
+					const { summary, recent } = data.context
+					const contextParts = []
+					if (summary) contextParts.push(`Summary: ${summary}`)
+					if (recent && recent.length > 0) contextParts.push(`Recent: ${recent.join(' ')}`)
+
+					if (contextParts.length > 0) {
+						messageToSend = `[Voice Context - ${contextParts.join(' | ')}] ${data.text}`
+					}
+				} else if (Array.isArray(data.context) && data.context.length > 0) {
+					// Fallback for legacy array format
 					const contextStr = data.context.join(' ')
 					messageToSend = `[Voice Context: ${contextStr}] ${data.text}`
 				}
