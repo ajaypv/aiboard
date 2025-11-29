@@ -53,7 +53,7 @@ export class VertexAIClient {
         console.log('🌐 VertexAIClient: Getting token...')
         const token = await this.getVertexAIToken()
         console.log('🌐 VertexAIClient: Connecting to WebSocket...')
-        const url = `wss://us-central1-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent?access_token=${encodeURIComponent(token)}`
+        const url = `wss://us-central1-aiplatform.googleapis.com:443/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent?access_token=${encodeURIComponent(token)}`
 
         return new Promise((resolve, reject) => {
             this.ws = new WebSocket(url)
@@ -76,8 +76,8 @@ export class VertexAIClient {
                 reject(e)
             })
 
-            this.ws.addEventListener('close', () => {
-                console.log('🌐 VertexAIClient: WebSocket closed')
+            this.ws.addEventListener('close', (event) => {
+                console.log(`🌐 VertexAIClient: WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`)
                 this.isConnected = false
                 this.ws = null
             })

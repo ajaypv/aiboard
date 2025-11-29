@@ -6,9 +6,12 @@ import { PlannerAgent } from '../agents/PlannerAgent'
 import { ExecutorAgent } from '../agents/ExecutorAgent'
 import { VerifierAgent } from '../agents/VerifierAgent'
 import { LinterAgent } from '../agents/LinterAgent'
+import { VertexAIClient } from '../utils/VertexAIClient'
+import { getSystemPrompt } from '../../shared/parts/SystemPromptPartUtil'
 
 export class AgentDurableObject extends DurableObject<Environment> {
 	private activeSessions: Map<WebSocket, any> = new Map()
+	private vertexClient: VertexAIClient | null = null
 
 	constructor(ctx: DurableObjectState, env: Environment) {
 		super(ctx, env)
@@ -33,9 +36,103 @@ export class AgentDurableObject extends DurableObject<Environment> {
 	}
 
 	private async stream(request: Request): Promise<Response> {
-		// Keep existing stream logic for backward compatibility if needed, 
-		// or replace with agent calls. For now, we focus on WebSocket.
 		return new Response('Stream endpoint deprecated in favor of WebSocket', { status: 400 })
+	}
+
+	private async ensureVertexConnected(ws: WebSocket) {
+		if (this.vertexClient) return
+
+		console.log('🎙️ AgentDO: Initializing Vertex AI connection...')
+		this.vertexClient = new VertexAIClient()
+
+		const baseSystemPrompt = getSystemPrompt()
+		const systemPrompt = `
+		${baseSystemPrompt}
+
+		---
+		ROLE: VOICE COMMAND INTERPRETER
+
+		You are listening to the user's voice input and converting it into canvas actions.
+		
+		Your job is to:
+		1. Listen to the user's voice commands
+		2. Understand their intent (drawing, moving, modifying shapes)
+		3. Generate direct drawing commands
+		
+		When you understand a command, use the "draw" tool to execute it immediately.
+		
+		Example commands:
+		- "Draw a blue box" → draw({ commands: [{ type: "create", shape: { type: "geo", ... }}] })
+		- "Move it to the right" → draw({ commands: [{ type: "move", ... }] })
+		- "Connect the box to the circle" → draw({ commands: [{ type: "create", shape: { type: "arrow", ... }}] })
+		
+		Be conversational and confirm actions briefly.
+		`
+
+		try {
+			await this.vertexClient.connect({
+				systemInstruction: systemPrompt,
+				tools: [{
+					functionDeclarations: [{
+						name: 'draw',
+						description: 'Execute drawing commands on the canvas',
+						parameters: {
+							type: 'object',
+							properties: {
+								commands: {
+									type: 'array',
+									description: 'Array of drawing commands',
+									items: { type: 'object' }
+								}
+							},
+							required: ['commands']
+						}
+					}]
+				}],
+				generationConfig: {
+					responseModalities: ['AUDIO', 'TEXT'],
+				}
+			})
+
+			// Subscribe to events
+			this.vertexClient.subscribe((event) => {
+				if (event.type === 'tool_call') {
+					const { name, args } = event.functionCall
+					console.log('🎙️ AgentDO: Tool call received:', name, args)
+
+					if (name === 'draw') {
+						console.log('🎙️ AgentDO: Draw commands:', JSON.stringify(args.commands))
+
+						// Forward actions to client
+						if (args.commands && Array.isArray(args.commands)) {
+							for (const command of args.commands) {
+								ws.send(JSON.stringify({
+									type: 'action',
+									action: {
+										...command,
+										complete: true,
+										time: 0
+									}
+								}))
+							}
+						}
+
+						// Send success response back to model
+						this.vertexClient?.sendToolResponse([{ name, response: { result: 'Commands executed' } }])
+					}
+				} else if (event.type === 'content') {
+					console.log('🎙️ AgentDO: Text response:', event.text)
+					// Forward text/audio response to client if needed
+					// For now, we rely on the client handling the actions
+				}
+			})
+
+			console.log('🎙️ AgentDO: Connected successfully')
+		} catch (error) {
+			console.error('🎙️ AgentDO: Connection failed:', error)
+			this.vertexClient = null
+			throw error
+		}
 	}
 
 	override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
@@ -44,21 +141,18 @@ export class AgentDurableObject extends DurableObject<Environment> {
 			const sessionId = data.sessionId || ('session-' + this.ctx.id.toString())
 			const isSuggesterEnabled = data.isSuggesterEnabled
 
-			// 0. Get Linter Agent
-			const linter = (await getAgentByName(this.env.LinterAgent, sessionId)) as unknown as DurableObjectStub<LinterAgent>
-
 			// Handle Audio Data
 			if (data.type === 'audio_data') {
-				console.log('🔹 AgentDO: Received audio data, forwarding to Linter...')
-				// Initialize Linter connection if needed (it handles idempotency)
-				await (linter as any).connect(sessionId)
+				// Initialize Vertex connection if needed
+				await this.ensureVertexConnected(ws)
 
 				// Forward audio
-				await (linter as any).processAudio(data.data)
+				if (this.vertexClient) {
+					await this.vertexClient.sendRealtimeInput(data.data)
+				}
 				return
 			}
 
-			console.log('🔹 AgentDO: Using session ID:', sessionId)
 			console.log('🔹 AgentDO: Suggester enabled:', isSuggesterEnabled)
 
 			// 1. Get Agents
@@ -323,9 +417,17 @@ export class AgentDurableObject extends DurableObject<Environment> {
 
 	override async webSocketClose(ws: WebSocket, code: number, reason: string) {
 		this.activeSessions.delete(ws)
+		if (this.vertexClient) {
+			this.vertexClient.disconnect()
+			this.vertexClient = null
+		}
 	}
 
 	override async webSocketError(ws: WebSocket, error: any) {
 		this.activeSessions.delete(ws)
+		if (this.vertexClient) {
+			this.vertexClient.disconnect()
+			this.vertexClient = null
+		}
 	}
 }
