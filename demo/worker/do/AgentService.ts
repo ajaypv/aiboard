@@ -16,7 +16,7 @@ import { buildSystemPrompt } from '../prompt/buildSystemPrompt'
 import { getModelName } from '../prompt/getModelName'
 import { closeAndParseJson } from './closeAndParseJson'
 
-export const PROJECT_ID = "x-micron-469410-g7";
+export const PROJECT_ID = "openodts";
 export const LOCATION = "global";
 export const LAMBDA_AUTH_URL = 'https://cgwuuuckpa.execute-api.ap-south-1.amazonaws.com/default/auth-lambad';
 

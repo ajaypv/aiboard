@@ -1,15 +1,54 @@
+export interface FunctionDeclaration {
+    name: string
+    description?: string
+    parameters?: any
+}
+
+export interface Tool {
+    functionDeclarations: FunctionDeclaration[]
+}
+
+export interface VertexAIConfig {
+    model?: string
+    systemInstruction?: string
+    tools?: Tool[]
+    generationConfig?: {
+        responseModalities?: ('TEXT' | 'AUDIO' | 'IMAGE')[]
+        temperature?: number
+        maxOutputTokens?: number
+        topP?: number
+        topK?: number
+    }
+}
+
+export type VertexAIEvent =
+    | { type: 'content', text: string }
+    | { type: 'tool_call', functionCall: { name: string, args: any } }
+    | { type: 'turn_complete' }
+    | { type: 'error', error: Error }
+    | { type: 'interrupted' }
+
 export class VertexAIClient {
     private static readonly LAMBDA_AUTH_URL = 'https://cgwuuuckpa.execute-api.ap-south-1.amazonaws.com/default/auth-lambad'
-    private static readonly MODEL = 'projects/x-micron-469410-g7/locations/global/publishers/google/models/gemini-2.0-flash-live-preview-04-09'
+    private static readonly DEFAULT_MODEL = 'projects/openodts/locations/global/publishers/google/models/gemini-2.0-flash-live-preview-04-09'
 
     private ws: WebSocket | null = null
     private isConnected = false
-    private resolveResponse: ((text: string) => void) | null = null
-    private rejectResponse: ((error: Error) => void) | null = null
-    private accumulatedText = ''
+    private config: VertexAIConfig | null = null
 
-    async connect(systemInstruction: string): Promise<void> {
+    // Event handlers
+    private onEvent: ((event: VertexAIEvent) => void) | null = null
+
+    constructor(config?: VertexAIConfig) {
+        this.config = config || null
+    }
+
+    async connect(config?: VertexAIConfig): Promise<void> {
         if (this.isConnected && this.ws) return
+
+        if (config) {
+            this.config = { ...this.config, ...config }
+        }
 
         console.log('🌐 VertexAIClient: Getting token...')
         const token = await this.getVertexAIToken()
@@ -22,16 +61,7 @@ export class VertexAIClient {
             this.ws.addEventListener('open', () => {
                 console.log('🌐 VertexAIClient: Connected. Sending setup...')
                 this.isConnected = true
-
-                // Send setup
-                const setupMessage = {
-                    setup: {
-                        model: VertexAIClient.MODEL,
-                        generationConfig: { responseModalities: ['TEXT'] },
-                        systemInstruction: { parts: [{ text: systemInstruction }] }
-                    }
-                }
-                this.ws?.send(JSON.stringify(setupMessage))
+                this.sendSetupMessage()
                 resolve()
             })
 
@@ -42,10 +72,7 @@ export class VertexAIClient {
             this.ws.addEventListener('error', (e) => {
                 console.error('🌐 VertexAIClient: WebSocket error:', e)
                 this.isConnected = false
-                if (this.rejectResponse) {
-                    this.rejectResponse(new Error('WebSocket error'))
-                    this.rejectResponse = null
-                }
+                this.emit({ type: 'error', error: new Error('WebSocket error') })
                 reject(e)
             })
 
@@ -57,15 +84,41 @@ export class VertexAIClient {
         })
     }
 
+    private sendSetupMessage() {
+        if (!this.ws || !this.config) return
+
+        const setupMessage = {
+            setup: {
+                model: this.config.model || VertexAIClient.DEFAULT_MODEL,
+                generationConfig: this.config.generationConfig || { responseModalities: ['TEXT'] },
+                systemInstruction: this.config.systemInstruction ? { parts: [{ text: this.config.systemInstruction }] } : undefined,
+                tools: this.config.tools
+            }
+        }
+        this.ws.send(JSON.stringify(setupMessage))
+    }
+
     async send(prompt: string): Promise<string> {
         if (!this.isConnected || !this.ws) {
             throw new Error('VertexAIClient is not connected')
         }
 
         return new Promise((resolve, reject) => {
-            this.resolveResponse = resolve
-            this.rejectResponse = reject
-            this.accumulatedText = ''
+            let accumulatedText = ''
+
+            const handler = (event: VertexAIEvent) => {
+                if (event.type === 'content') {
+                    accumulatedText += event.text
+                } else if (event.type === 'turn_complete') {
+                    this.onEvent = null // Clear handler
+                    resolve(accumulatedText)
+                } else if (event.type === 'error') {
+                    this.onEvent = null
+                    reject(event.error)
+                }
+            }
+
+            this.onEvent = handler
 
             console.log('🌐 VertexAIClient: Sending prompt...')
             const userMessage = {
@@ -78,11 +131,29 @@ export class VertexAIClient {
         })
     }
 
+    /**
+     * Send a tool response back to the model
+     */
+    async sendToolResponse(functionResponses: { name: string, response: any }[]) {
+        if (!this.isConnected || !this.ws) {
+            throw new Error('VertexAIClient is not connected')
+        }
 
+        const parts = functionResponses.map(fr => ({
+            functionResponse: {
+                name: fr.name,
+                response: { result: fr.response } // Wrap in result object as per Gemini API usually
+            }
+        }))
 
-    private messageHandler: ((text: string) => void) | null = null
-    private errorHandler: ((error: Error) => void) | null = null
-    private completionHandler: (() => void) | null = null
+        const message = {
+            clientContent: {
+                turns: [{ role: 'user', parts }],
+                turnComplete: true
+            }
+        }
+        this.ws.send(JSON.stringify(message))
+    }
 
     async *stream(prompt: string): AsyncGenerator<string> {
         if (!this.isConnected || !this.ws) {
@@ -96,29 +167,26 @@ export class VertexAIClient {
         let done = false
         let error: Error | null = null
 
-        // Setup handlers
-        this.messageHandler = (text) => {
-            if (resolveNext) {
-                resolveNext({ value: text, done: false })
-                resolveNext = null
-            } else {
-                queue.push(text)
-            }
-        }
-
-        this.errorHandler = (err) => {
-            error = err
-            if (resolveNext) {
-                resolveNext({ value: undefined, done: true }) // Or throw
-                resolveNext = null
-            }
-        }
-
-        this.completionHandler = () => {
-            done = true
-            if (resolveNext) {
-                resolveNext({ value: undefined, done: true })
-                resolveNext = null
+        this.onEvent = (event) => {
+            if (event.type === 'content') {
+                if (resolveNext) {
+                    resolveNext({ value: event.text, done: false })
+                    resolveNext = null
+                } else {
+                    queue.push(event.text)
+                }
+            } else if (event.type === 'turn_complete') {
+                done = true
+                if (resolveNext) {
+                    resolveNext({ value: undefined, done: true })
+                    resolveNext = null
+                }
+            } else if (event.type === 'error') {
+                error = event.error
+                if (resolveNext) {
+                    resolveNext({ value: undefined, done: true }) // Or throw
+                    resolveNext = null
+                }
             }
         }
 
@@ -139,7 +207,6 @@ export class VertexAIClient {
                 }
                 if (done) break
 
-                // Wait for next message
                 const result = await new Promise<IteratorResult<string>>((resolve) => {
                     resolveNext = resolve
                 })
@@ -148,10 +215,18 @@ export class VertexAIClient {
                 yield result.value
             }
         } finally {
-            // Cleanup
-            this.messageHandler = null
-            this.errorHandler = null
-            this.completionHandler = null
+            this.onEvent = null
+        }
+    }
+
+    // Advanced usage: Subscribe to all events (content, tool calls, etc.)
+    subscribe(callback: (event: VertexAIEvent) => void) {
+        this.onEvent = callback
+    }
+
+    private emit(event: VertexAIEvent) {
+        if (this.onEvent) {
+            this.onEvent(event)
         }
     }
 
@@ -169,44 +244,31 @@ export class VertexAIClient {
             if (response.serverContent?.modelTurn?.parts) {
                 for (const part of response.serverContent.modelTurn.parts) {
                     if (part.text) {
-                        if (this.messageHandler) {
-                            this.messageHandler(part.text)
-                        } else {
-                            this.accumulatedText += part.text
-                        }
+                        this.emit({ type: 'content', text: part.text })
+                    }
+                    if (part.functionCall) {
+                        this.emit({ type: 'tool_call', functionCall: part.functionCall })
                     }
                 }
             }
 
             if (response.serverContent?.turnComplete) {
                 console.log('🌐 VertexAIClient: Turn complete.')
-                if (this.completionHandler) {
-                    this.completionHandler()
-                }
-                if (this.resolveResponse) {
-                    this.resolveResponse(this.accumulatedText)
-                    this.resolveResponse = null
-                    this.rejectResponse = null
-                }
+                this.emit({ type: 'turn_complete' })
+            }
+
+            if (response.serverContent?.interrupted) {
+                console.log('🌐 VertexAIClient: Interrupted.')
+                this.emit({ type: 'interrupted' })
             }
 
             if (response.error) {
                 console.error('🌐 VertexAIClient: Error response:', response.error)
-                const err = new Error(response.error.message)
-                if (this.errorHandler) {
-                    this.errorHandler(err)
-                }
-                if (this.rejectResponse) {
-                    this.rejectResponse(err)
-                    this.resolveResponse = null
-                    this.rejectResponse = null
-                }
+                this.emit({ type: 'error', error: new Error(response.error.message) })
             }
         } catch (e: any) {
             console.error('🌐 VertexAIClient: Parse error:', e)
-            if (this.errorHandler) {
-                this.errorHandler(e)
-            }
+            this.emit({ type: 'error', error: e })
         }
     }
 
@@ -215,13 +277,14 @@ export class VertexAIClient {
             this.ws.close()
             this.ws = null
             this.isConnected = false
+            this.onEvent = null
         }
     }
 
     private static cachedToken: string | null = null
     private static tokenExpiry: number = 0
 
-    private async getVertexAIToken(): Promise<string> {
+    async getVertexAIToken(): Promise<string> {
         const now = Date.now()
         if (VertexAIClient.cachedToken && now < VertexAIClient.tokenExpiry) {
             console.log('🌐 VertexAIClient: Using cached token')
@@ -229,16 +292,19 @@ export class VertexAIClient {
         }
 
         console.log('🌐 VertexAIClient: Fetching new token...')
-        const response = await fetch(VertexAIClient.LAMBDA_AUTH_URL)
-        const data = await response.json() as any
-        const token = data.auth?.access_token || data.access_token
+        try {
+            const response = await fetch(VertexAIClient.LAMBDA_AUTH_URL)
+            const data = await response.json() as any
+            const token = data.auth?.access_token || data.access_token
 
-        if (token) {
-            VertexAIClient.cachedToken = token
-            // Cache for 10 minutes (600,000 ms) - slightly less to be safe
-            VertexAIClient.tokenExpiry = now + 9 * 60 * 1000
+            if (token) {
+                VertexAIClient.cachedToken = token
+                VertexAIClient.tokenExpiry = now + 9 * 60 * 1000
+            }
+            return token
+        } catch (e) {
+            console.error('Failed to fetch token:', e)
+            throw e
         }
-
-        return token
     }
 }

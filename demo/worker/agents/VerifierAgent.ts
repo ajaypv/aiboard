@@ -49,7 +49,7 @@ export class VerifierAgent extends Agent<Environment, VerifierState> {
                 ]
             }
             `
-            await this.client.connect(systemPrompt)
+            await this.client.connect({ systemInstruction: systemPrompt })
         }
 
         try {

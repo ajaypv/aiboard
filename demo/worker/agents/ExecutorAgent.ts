@@ -44,7 +44,7 @@ export class ExecutorAgent extends Agent<Environment, ExecutorState> {
             { "_type": "create-shape", "type": "geo", "x": 100, "y": 100, "props": { "w": 100, "h": 100, "geo": "rectangle", "color": "blue" } }
             { "_type": "create-shape", "type": "geo", "x": 250, "y": 100, "props": { "w": 100, "h": 100, "geo": "ellipse", "color": "red" } }
             `
-            await this.client.connect(systemPrompt)
+            await this.client.connect({ systemInstruction: systemPrompt })
         }
 
         const { readable, writable } = new TransformStream()

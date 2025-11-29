@@ -83,7 +83,7 @@ export class PlannerAgent extends Agent<Environment, PlannerState> {
                 ]
             }
             `
-            await this.client.connect(systemPrompt)
+            await this.client.connect({ systemInstruction: systemPrompt })
         }
 
         try {
