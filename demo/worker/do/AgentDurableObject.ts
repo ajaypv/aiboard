@@ -5,6 +5,7 @@ import { Environment } from '../environment'
 import { PlannerAgent } from '../agents/PlannerAgent'
 import { ExecutorAgent } from '../agents/ExecutorAgent'
 import { VerifierAgent } from '../agents/VerifierAgent'
+import { LinterAgent } from '../agents/LinterAgent'
 
 export class AgentDurableObject extends DurableObject<Environment> {
 	private activeSessions: Map<WebSocket, any> = new Map()
@@ -42,6 +43,21 @@ export class AgentDurableObject extends DurableObject<Environment> {
 			const data = JSON.parse(message as string)
 			const sessionId = data.sessionId || ('session-' + this.ctx.id.toString())
 			const isSuggesterEnabled = data.isSuggesterEnabled
+
+			// 0. Get Linter Agent
+			const linter = (await getAgentByName(this.env.LinterAgent, sessionId)) as unknown as DurableObjectStub<LinterAgent>
+
+			// Handle Audio Data
+			if (data.type === 'audio_data') {
+				console.log('🔹 AgentDO: Received audio data, forwarding to Linter...')
+				// Initialize Linter connection if needed (it handles idempotency)
+				await (linter as any).connect(sessionId)
+
+				// Forward audio
+				await (linter as any).processAudio(data.data)
+				return
+			}
+
 			console.log('🔹 AgentDO: Using session ID:', sessionId)
 			console.log('🔹 AgentDO: Suggester enabled:', isSuggesterEnabled)
 

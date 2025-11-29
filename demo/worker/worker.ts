@@ -14,6 +14,7 @@ export { ChatAgent } from './agents/ChatAgent'
 export { PlannerAgent } from './agents/PlannerAgent'
 export { ExecutorAgent } from './agents/ExecutorAgent'
 export { VerifierAgent } from './agents/VerifierAgent'
+export { LinterAgent } from './agents/LinterAgent'
 
 const { preflight, corsify } = cors({ origin: '*' })
 

@@ -21,6 +21,7 @@ bindings = [
     { name = "PlannerAgent", class_name = "PlannerAgent" },
     { name = "ExecutorAgent", class_name = "ExecutorAgent" },
     { name = "VerifierAgent", class_name = "VerifierAgent" },
+    { name = "LinterAgent", class_name = "LinterAgent" },
 ]
 
 # Cloudflare AI binding for speech-to-text
@@ -43,3 +44,7 @@ new_sqlite_classes = ["ChatAgent"]
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["PlannerAgent", "ExecutorAgent", "VerifierAgent"]
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["LinterAgent"]

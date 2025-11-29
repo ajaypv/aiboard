@@ -5,6 +5,7 @@ import { TldrawAgent } from '../agent/TldrawAgent'
 import { ChatHistory } from './chat-history/ChatHistory'
 import { ChatInput } from './ChatInput'
 import { TodoList } from './TodoList'
+import { LiveModeButton } from '../agent/LiveModeButton'
 
 export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 	const { editor } = agent
@@ -171,6 +172,7 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 		<div className="chat-panel tl-theme__dark">
 			<div className="chat-header">
 				<NewChatButton />
+				<LiveModeButton />
 				<select
 					value={sttModel}
 					onChange={(e) => setSttModel(e.target.value)}

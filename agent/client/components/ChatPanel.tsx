@@ -7,6 +7,7 @@ import { ChatInput } from './ChatInput'
 import { TodoList } from './TodoList'
 
 import { Suggestions } from './Suggestions'
+import { LiveModeButton } from './LiveModeButton'
 
 export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 	const { editor } = agent
@@ -77,6 +78,7 @@ export function ChatPanel({ agent }: { agent: TldrawAgent }) {
 				>
 					{useValue(agent.$isSilent) ? '🔇' : '🔊'}
 				</button>
+				<LiveModeButton editor={editor} />
 				<NewChatButton />
 			</div>
 			<Suggestions agent={agent} />

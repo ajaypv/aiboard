@@ -132,6 +132,26 @@ export class VertexAIClient {
     }
 
     /**
+     * Send realtime audio input chunks
+     */
+    async sendRealtimeInput(base64Audio: string) {
+        if (!this.isConnected || !this.ws) {
+            // throw new Error('VertexAIClient is not connected')
+            return // Fail silently for audio streaming to avoid crash loops
+        }
+
+        const message = {
+            realtimeInput: {
+                mediaChunks: [{
+                    mimeType: "audio/pcm;rate=24000",
+                    data: base64Audio
+                }]
+            }
+        }
+        this.ws.send(JSON.stringify(message))
+    }
+
+    /**
      * Send a tool response back to the model
      */
     async sendToolResponse(functionResponses: { name: string, response: any }[]) {
